@@ -1,0 +1,255 @@
+# Platform 触发的 Host 云构建：iOS（unsigned IPA）/ macOS / Windows Desktop
+# 由 Backend workflow_dispatch 调用；勿手动改 inputs 语义。
+name: Bujing Platform Host Build
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_id:
+        description: Platform build id (run-name suffix)
+        required: true
+        type: string
+      target:
+        description: ios | ios-sdk | macos | windows
+        required: true
+        type: choice
+        options:
+          - ios
+          - ios-sdk
+          - macos
+          - windows
+      source_url:
+        description: Staged host source.zip URL (Platform)
+        required: true
+        type: string
+      source_token:
+        description: HMAC token for source_url
+        required: true
+        type: string
+      flutter_version:
+        description: Flutter SDK version
+        required: false
+        default: "3.44.1"
+        type: string
+      runtime_url:
+        description: BUJING_RUNTIME dart-define (ios-sdk)
+        required: false
+        default: ""
+        type: string
+
+run-name: bujing-gha-${{ inputs.build_id }}-${{ inputs.target }}
+
+concurrency:
+  group: bujing-gha-${{ inputs.build_id }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ${{ inputs.target == 'windows' && 'windows-latest' || 'macos-latest' }}
+    timeout-minutes: ${{ inputs.target == 'windows' && 30 || 60 }}
+
+    steps:
+      - name: Download staged host source (Unix)
+        if: inputs.target != 'windows'
+        env:
+          SOURCE_URL: ${{ inputs.source_url }}
+          SOURCE_TOKEN: ${{ inputs.source_token }}
+        run: |
+          set -euo pipefail
+          curl -fsSL -H "X-Bujing-Gha-Token: ${SOURCE_TOKEN}" -o source.zip "${SOURCE_URL}"
+          mkdir -p host-src
+          unzip -q source.zip -d host-src
+          if [ "${{ inputs.target }}" = "ios-sdk" ]; then
+            MODULE_DIR="$(find host-src -mindepth 1 -maxdepth 3 -type d -name 'bujing_android_module' | head -1)"
+            if [ -z "${MODULE_DIR}" ]; then
+              echo "bujing_android_module not found in source.zip"
+              exit 1
+            fi
+            echo "HOST_DIR=${MODULE_DIR}" >> "$GITHUB_ENV"
+          else
+            HOST_DIR="$(find host-src -mindepth 1 -maxdepth 1 -type d | head -1)"
+            if [ -z "${HOST_DIR}" ]; then
+              echo "No host directory in source.zip"
+              exit 1
+            fi
+            echo "HOST_DIR=${HOST_DIR}" >> "$GITHUB_ENV"
+          fi
+
+      - name: Download staged host source (Windows)
+        if: inputs.target == 'windows'
+        shell: pwsh
+        env:
+          SOURCE_URL: ${{ inputs.source_url }}
+          SOURCE_TOKEN: ${{ inputs.source_token }}
+        run: |
+          $headers = @{ 'X-Bujing-Gha-Token' = $env:SOURCE_TOKEN }
+          Invoke-WebRequest -Uri $env:SOURCE_URL -Headers $headers -OutFile source.zip
+          New-Item -ItemType Directory -Force -Path host-src | Out-Null
+          Expand-Archive -Path source.zip -DestinationPath host-src -Force
+          $hostDir = Get-ChildItem host-src -Directory | Select-Object -First 1
+          if (-not $hostDir) { throw 'No host directory in source.zip' }
+          "HOST_DIR=$($hostDir.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Resolve pubspec lock hash
+        id: lock
+        shell: bash
+        run: |
+          LOCK="${HOST_DIR}/pubspec.lock"
+          if [ -f "$LOCK" ]; then
+            HASH=$(sha256sum "$LOCK" | cut -c1-16)
+          else
+            HASH="no-lock"
+          fi
+          echo "hash=${HASH}" >> "$GITHUB_OUTPUT"
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ inputs.flutter_version }}
+          channel: stable
+          cache: true
+
+      - name: Cache pub
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ runner.os == 'Windows' && '~\AppData\Local\Pub\Cache' || '~/.pub-cache' }}
+          key: bujing-gha-pub-${{ runner.os }}-${{ inputs.target }}-${{ steps.lock.outputs.hash }}
+          restore-keys: |
+            bujing-gha-pub-${{ runner.os }}-${{ inputs.target }}-
+
+      - name: Cache CocoaPods (macOS/iOS)
+        if: inputs.target != 'windows'
+        uses: actions/cache@v4
+        with:
+          path: ~/Library/Caches/CocoaPods
+          key: bujing-gha-pods-${{ steps.lock.outputs.hash }}
+          restore-keys: bujing-gha-pods-
+
+      - name: Flutter pub get
+        shell: bash
+        working-directory: ${{ env.HOST_DIR }}
+        run: flutter pub get
+
+      - name: Build iOS SDK (XCFramework)
+        if: inputs.target == 'ios-sdk'
+        shell: bash
+        working-directory: ${{ env.HOST_DIR }}
+        env:
+          RUNTIME_URL: ${{ inputs.runtime_url }}
+        run: |
+          OUT="$RUNNER_TEMP/framework-out"
+          mkdir -p "$OUT"
+          flutter build ios-framework --release --no-debug --no-profile \
+            --dart-define=BUJING_RUNTIME="${RUNTIME_URL}" \
+            --output="$OUT"
+          mkdir -p "$RUNNER_TEMP/artifact/ios-sdk"
+          (cd "$OUT" && zip -r "$RUNNER_TEMP/artifact/ios-sdk/frameworks.zip" .)
+
+      - name: Build iOS IPA (unsigned)
+        if: inputs.target == 'ios'
+        shell: bash
+        working-directory: ${{ env.HOST_DIR }}
+        run: |
+          set -euo pipefail
+          # 勿用 `flutter build ipa` / 勿依赖 Flutter 对 xcodebuild 失败的 Team 兜底提示。
+          # --no-codesign 仍会跑 xcodebuild；失败时 Flutter 常误报「需要 Development Team」。
+          flutter build ios --release --no-codesign --config-only \
+            --obfuscate --split-debug-info=build/debug-info
+          xcodebuild \
+            -workspace ios/Runner.xcworkspace \
+            -scheme Runner \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            BUILD_DIR="${PWD}/build/ios" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_IDENTITY="" \
+            CODE_SIGN_STYLE=Manual \
+            DEVELOPMENT_TEAM="" \
+            COMPILER_INDEX_STORE_ENABLE=NO
+          APP=""
+          for candidate in \
+            "build/ios/iphoneos/Runner.app" \
+            "build/ios/Release-iphoneos/Runner.app"; do
+            if [ -d "$candidate" ]; then
+              APP="$candidate"
+              break
+            fi
+          done
+          if [ -z "$APP" ]; then
+            APP="$(find build/ios -path '*/Runner.app' -type d 2>/dev/null | head -1)"
+          fi
+          if [ -z "$APP" ] || [ ! -d "$APP" ]; then
+            echo "Runner.app not found under build/ios"
+            find build/ios -maxdepth 4 -type d 2>/dev/null || true
+            exit 1
+          fi
+          mkdir -p "$RUNNER_TEMP/artifact"
+          rm -rf "$RUNNER_TEMP/artifact/Payload"
+          mkdir -p "$RUNNER_TEMP/artifact/Payload"
+          cp -R "$APP" "$RUNNER_TEMP/artifact/Payload/Runner.app"
+          (cd "$RUNNER_TEMP/artifact" && zip -qr Runner.ipa Payload)
+          rm -rf "$RUNNER_TEMP/artifact/Payload"
+
+      - name: Build macOS Desktop
+        if: inputs.target == 'macos'
+        shell: bash
+        working-directory: ${{ env.HOST_DIR }}
+        run: |
+          flutter build macos -t lib/main_desktop.dart --release
+          PRODUCTS="build/macos/Build/Products/Release"
+          APP="$(find "$PRODUCTS" -maxdepth 1 -name '*.app' | head -1)"
+          if [ -z "$APP" ]; then
+            echo "No .app under $PRODUCTS"
+            exit 1
+          fi
+          mkdir -p "$RUNNER_TEMP/artifact/macos"
+          cp -R "$APP" "$RUNNER_TEMP/artifact/macos/"
+
+      - name: Build Windows Desktop
+        if: inputs.target == 'windows'
+        shell: pwsh
+        working-directory: ${{ env.HOST_DIR }}
+        run: |
+          flutter build windows -t lib/main_desktop.dart --release
+          $candidates = @(
+            'build\windows\x64\runner\Release',
+            'build\windows\runner\Release'
+          )
+          $releaseDir = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $releaseDir) { throw 'Windows Release output not found' }
+          New-Item -ItemType Directory -Force -Path "$env:RUNNER_TEMP\artifact\windows" | Out-Null
+          Copy-Item -Path "$releaseDir\*" -Destination "$env:RUNNER_TEMP\artifact\windows" -Recurse -Force
+
+      - name: Upload artifact (iOS SDK)
+        if: inputs.target == 'ios-sdk'
+        uses: actions/upload-artifact@v4
+        with:
+          name: bujing-host-${{ inputs.build_id }}
+          path: ${{ runner.temp }}/artifact/ios-sdk
+          retention-days: 1
+
+      - name: Upload artifact (iOS)
+        if: inputs.target == 'ios'
+        uses: actions/upload-artifact@v4
+        with:
+          name: bujing-host-${{ inputs.build_id }}
+          path: ${{ runner.temp }}/artifact/Runner.ipa
+          retention-days: 1
+
+      - name: Upload artifact (macOS)
+        if: inputs.target == 'macos'
+        uses: actions/upload-artifact@v4
+        with:
+          name: bujing-host-${{ inputs.build_id }}
+          path: ${{ runner.temp }}/artifact/macos
+          retention-days: 1
+
+      - name: Upload artifact (Windows)
+        if: inputs.target == 'windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: bujing-host-${{ inputs.build_id }}
+          path: ${{ runner.temp }}/artifact/windows
+          retention-days: 1

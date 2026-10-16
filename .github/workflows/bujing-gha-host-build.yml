@@ -103,12 +103,13 @@ jobs:
           fi
           echo "hash=${HASH}" >> "$GITHUB_OUTPUT"
 
+      # JDK 21：flutter_readium 声明 source 18，JDK 17 会报 invalid source release: 18
       - name: Setup Java (Android SDK)
         if: inputs.target == 'android-sdk'
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: "17"
+          java-version: "21"
 
       # v3 默认会装已下架的 `tools` 包 → Failed to find package 'tools'
       - name: Setup Android SDK

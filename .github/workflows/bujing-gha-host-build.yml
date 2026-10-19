@@ -37,6 +37,11 @@ on:
         required: false
         default: ""
         type: string
+      project_id:
+        description: BUJING_PROJECT_ID dart-define (ios-sdk 编排分桶)
+        required: false
+        default: ""
+        type: string
 
 run-name: bujing-gha-${{ inputs.build_id }}-${{ inputs.target }}
 
@@ -150,11 +155,15 @@ jobs:
         working-directory: ${{ env.HOST_DIR }}
         env:
           RUNTIME_URL: ${{ inputs.runtime_url }}
+          PROJECT_ID: ${{ inputs.project_id }}
         run: |
+          : "${RUNTIME_URL:?runtime_url required for ios-sdk}"
+          : "${PROJECT_ID:?project_id required for ios-sdk}"
           OUT="$RUNNER_TEMP/framework-out"
           mkdir -p "$OUT"
           flutter build ios-framework --release --no-debug --no-profile \
             --dart-define=BUJING_RUNTIME="${RUNTIME_URL}" \
+            --dart-define=BUJING_PROJECT_ID="${PROJECT_ID}" \
             --output="$OUT"
           mkdir -p "$RUNNER_TEMP/artifact/ios-sdk"
           (cd "$OUT" && zip -r "$RUNNER_TEMP/artifact/ios-sdk/frameworks.zip" .)

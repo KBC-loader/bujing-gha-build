@@ -7,12 +7,13 @@
 #
 # 产物（七牛，与 preview-apk/ 平行）：
 #   preview-ipa/<version>/Bujing-preview.ipa
+#   preview-ipa/<version>/symbols/app.ios-arm64.symbols   （Dart 混淆符号表，崩溃符号化用）
 #   preview-ipa/<version>/manifest.json
 #   preview-ipa/latest/manifest.json
 #
 # 需要的仓库 Secrets（Settings → Secrets and variables → Actions）：
-#   BUJING_QINIU_ACCESS_KEY / BUJING_QINIU_SECRET_KEY / BUJING_QINIU_BUCKET / BUJING_QINIU_DOMAIN
-#   （可选 BUJING_QINIU_REGION 默认 z0、BUJING_QINIU_PRIVATE 默认 1）
+#   BUJING_GHA_QINIU_ACCESS_KEY / BUJING_GHA_QINIU_SECRET_KEY / BUJING_GHA_QINIU_BUCKET / BUJING_GHA_QINIU_DOMAIN
+#   （可选 BUJING_GHA_QINIU_REGION 默认 z0、BUJING_GHA_QINIU_PRIVATE 默认 1）
 #   —— 未配置时仍会构建并上传 Actions artifact，只是不上传七牛。
 #
 # 本文件需同步到承载构建的 GitHub 仓（BUJING_GHA_REPO，当前 KBC-loader/bujing-gha-build）。
@@ -101,22 +102,28 @@ jobs:
           BUJING_PREVIEW_SHELL_BUILD_NAME: ${{ inputs.build_name }}
           BUJING_PREVIEW_SHELL_BUILD_NUMBER: ${{ inputs.build_number }}
           BUJING_PREVIEW_IPA_OUT: ${{ github.workspace }}/out/Bujing-preview.ipa
+          # Dart 混淆符号表：随 IPA 一起落在 out/symbols，供上传/归档
+          BUJING_PREVIEW_IPA_SYMBOLS_OUT: ${{ github.workspace }}/out/symbols
         run: |
           set -euo pipefail
           node scripts/build-preview-ipa.mjs
           ls -lh "$BUJING_PREVIEW_IPA_OUT"
           cat "${BUJING_PREVIEW_IPA_OUT}.meta.json"
+          ls -lh "${BUJING_PREVIEW_IPA_SYMBOLS_OUT}" || true
 
       - name: Upload to Qiniu
         working-directory: src
         env:
           BUJING_PREVIEW_IPA_OUT: ${{ github.workspace }}/out/Bujing-preview.ipa
-          BUJING_QINIU_ACCESS_KEY: ${{ secrets.BUJING_QINIU_ACCESS_KEY }}
-          BUJING_QINIU_SECRET_KEY: ${{ secrets.BUJING_QINIU_SECRET_KEY }}
-          BUJING_QINIU_BUCKET: ${{ secrets.BUJING_QINIU_BUCKET }}
-          BUJING_QINIU_DOMAIN: ${{ secrets.BUJING_QINIU_DOMAIN }}
-          BUJING_QINIU_REGION: ${{ secrets.BUJING_QINIU_REGION }}
-          BUJING_QINIU_PRIVATE: ${{ secrets.BUJING_QINIU_PRIVATE }}
+          BUJING_PREVIEW_IPA_SYMBOLS_DIR: ${{ github.workspace }}/out/symbols
+          # 仓库名带 GHA 前缀（BUJING_GHA_QINIU_*），与 CNB 密钥仓命名一致；
+          # 传给脚本的 env 名保持 BUJING_QINIU_*（脚本只认这组）
+          BUJING_QINIU_ACCESS_KEY: ${{ secrets.BUJING_GHA_QINIU_ACCESS_KEY }}
+          BUJING_QINIU_SECRET_KEY: ${{ secrets.BUJING_GHA_QINIU_SECRET_KEY }}
+          BUJING_QINIU_BUCKET: ${{ secrets.BUJING_GHA_QINIU_BUCKET }}
+          BUJING_QINIU_DOMAIN: ${{ secrets.BUJING_GHA_QINIU_DOMAIN }}
+          BUJING_QINIU_REGION: ${{ secrets.BUJING_GHA_QINIU_REGION }}
+          BUJING_QINIU_PRIVATE: ${{ secrets.BUJING_GHA_QINIU_PRIVATE }}
           BUJING_PREVIEW_SHELL_BUILD_NAME: ${{ inputs.build_name }}
           BUJING_PREVIEW_SHELL_BUILD_NUMBER: ${{ inputs.build_number }}
         run: |
@@ -140,4 +147,5 @@ jobs:
           path: |
             ${{ github.workspace }}/out/Bujing-preview.ipa
             ${{ github.workspace }}/out/Bujing-preview.ipa.meta.json
+            ${{ github.workspace }}/out/symbols/*.symbols
           retention-days: 7

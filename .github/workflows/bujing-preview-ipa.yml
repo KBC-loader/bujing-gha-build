@@ -1,0 +1,143 @@
+# 平台通用预览壳 IPA（iOS，unsigned）—— 与 APK 通道同源、同版本号口径
+#
+# 触发：CNB main push 的 build-preview-ipa 任务构建源码包 → 上传七牛 →
+#       workflow_dispatch 调本 workflow。也可在 Actions 页手动 Run workflow。
+#
+# 为什么在 GitHub 而不是 CNB：iOS 编译需要 macOS + Xcode，CNB 只有 Linux runner。
+#
+# 产物（七牛，与 preview-apk/ 平行）：
+#   preview-ipa/<version>/Bujing-preview.ipa
+#   preview-ipa/<version>/manifest.json
+#   preview-ipa/latest/manifest.json
+#
+# 需要的仓库 Secrets（Settings → Secrets and variables → Actions）：
+#   BUJING_QINIU_ACCESS_KEY / BUJING_QINIU_SECRET_KEY / BUJING_QINIU_BUCKET / BUJING_QINIU_DOMAIN
+#   （可选 BUJING_QINIU_REGION 默认 z0、BUJING_QINIU_PRIVATE 默认 1）
+#   —— 未配置时仍会构建并上传 Actions artifact，只是不上传七牛。
+#
+# 本文件需同步到承载构建的 GitHub 仓（BUJING_GHA_REPO，当前 KBC-loader/bujing-gha-build）。
+name: Bujing Preview Shell IPA
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_url:
+        description: 预览壳源码包（tar.gz）地址，由 CNB 上传七牛后给出
+        required: true
+        type: string
+      source_token:
+        description: 下载源码包时附加的 X-Bujing-Gha-Token（可选）
+        required: false
+        default: ""
+        type: string
+      build_name:
+        description: CFBundleShortVersionString（默认取 mobile/pubspec.yaml）
+        required: false
+        default: ""
+        type: string
+      build_number:
+        description: CFBundleVersion（单调递增，默认 git 提交数）
+        required: false
+        default: ""
+        type: string
+      flutter_version:
+        description: Flutter SDK 版本
+        required: false
+        default: "3.47.3"
+        type: string
+
+run-name: bujing-preview-ipa-${{ inputs.build_name }}-${{ inputs.build_number }}
+
+concurrency:
+  group: bujing-preview-ipa
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Download staged source
+        env:
+          SOURCE_URL: ${{ inputs.source_url }}
+          SOURCE_TOKEN: ${{ inputs.source_token }}
+        run: |
+          set -euo pipefail
+          if [ -n "${SOURCE_TOKEN}" ]; then
+            curl -fsSL -H "X-Bujing-Gha-Token: ${SOURCE_TOKEN}" -o source.tar.gz "${SOURCE_URL}"
+          else
+            curl -fsSL -o source.tar.gz "${SOURCE_URL}"
+          fi
+          mkdir -p src
+          tar -xzf source.tar.gz -C src
+          for dir in mobile packages scripts; do
+            if [ ! -d "src/$dir" ]; then
+              echo "源码包缺少 $dir" >&2
+              ls -la src || true
+              exit 1
+            fi
+          done
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ inputs.flutter_version }}
+          channel: stable
+          cache: true
+
+      - name: Cache CocoaPods
+        uses: actions/cache@v4
+        with:
+          path: ~/Library/Caches/CocoaPods
+          key: bujing-preview-ipa-pods-${{ hashFiles('src/mobile/pubspec.lock') }}
+          restore-keys: bujing-preview-ipa-pods-
+
+      - name: Build unsigned IPA
+        working-directory: src
+        env:
+          BUJING_PREVIEW_SHELL_BUILD_NAME: ${{ inputs.build_name }}
+          BUJING_PREVIEW_SHELL_BUILD_NUMBER: ${{ inputs.build_number }}
+          BUJING_PREVIEW_IPA_OUT: ${{ github.workspace }}/out/Bujing-preview.ipa
+        run: |
+          set -euo pipefail
+          node scripts/build-preview-ipa.mjs
+          ls -lh "$BUJING_PREVIEW_IPA_OUT"
+          cat "${BUJING_PREVIEW_IPA_OUT}.meta.json"
+
+      - name: Upload to Qiniu
+        working-directory: src
+        env:
+          BUJING_PREVIEW_IPA_OUT: ${{ github.workspace }}/out/Bujing-preview.ipa
+          BUJING_QINIU_ACCESS_KEY: ${{ secrets.BUJING_QINIU_ACCESS_KEY }}
+          BUJING_QINIU_SECRET_KEY: ${{ secrets.BUJING_QINIU_SECRET_KEY }}
+          BUJING_QINIU_BUCKET: ${{ secrets.BUJING_QINIU_BUCKET }}
+          BUJING_QINIU_DOMAIN: ${{ secrets.BUJING_QINIU_DOMAIN }}
+          BUJING_QINIU_REGION: ${{ secrets.BUJING_QINIU_REGION }}
+          BUJING_QINIU_PRIVATE: ${{ secrets.BUJING_QINIU_PRIVATE }}
+          BUJING_PREVIEW_SHELL_BUILD_NAME: ${{ inputs.build_name }}
+          BUJING_PREVIEW_SHELL_BUILD_NUMBER: ${{ inputs.build_number }}
+        run: |
+          set -euo pipefail
+          if [ -z "${BUJING_QINIU_ACCESS_KEY:-}" ] || [ -z "${BUJING_QINIU_SECRET_KEY:-}" ] \
+             || [ -z "${BUJING_QINIU_BUCKET:-}" ] || [ -z "${BUJING_QINIU_DOMAIN:-}" ]; then
+            echo "七牛 secrets 未配置，跳过上传（IPA 仍在 artifact 里）"
+            exit 0
+          fi
+          mkdir -p /tmp/bujing-qiniu && cd /tmp/bujing-qiniu
+          npm init -y >/dev/null
+          npm install --no-fund --no-audit qiniu@7.15.2
+          cd "$GITHUB_WORKSPACE/src"
+          NODE_PATH=/tmp/bujing-qiniu/node_modules \
+            node scripts/ci/upload-preview-ipa-qiniu.mjs "$BUJING_PREVIEW_IPA_OUT"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: bujing-preview-ipa-${{ inputs.build_name }}-${{ inputs.build_number }}
+          path: |
+            ${{ github.workspace }}/out/Bujing-preview.ipa
+            ${{ github.workspace }}/out/Bujing-preview.ipa.meta.json
+          retention-days: 7

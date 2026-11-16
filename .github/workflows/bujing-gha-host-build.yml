@@ -267,12 +267,15 @@ jobs:
           New-Item -ItemType Directory -Force -Path "$env:RUNNER_TEMP\artifact\windows" | Out-Null
           Copy-Item -Path "$releaseDir\*" -Destination "$env:RUNNER_TEMP\artifact\windows" -Recurse -Force
 
+      # if-no-files-found 必须 error：默认 warn 会「整 run 绿勾但 Artifacts 为 —」，
+      # Platform 再去拉就会挂；空目录/路径错必须让 job 失败。
       - name: Upload artifact (iOS SDK)
         if: inputs.target == 'ios-sdk'
         uses: actions/upload-artifact@v4
         with:
           name: bujing-host-${{ inputs.build_id }}
           path: ${{ runner.temp }}/artifact/ios-sdk
+          if-no-files-found: error
           retention-days: 3
 
       - name: Upload artifact (iOS)
@@ -281,6 +284,7 @@ jobs:
         with:
           name: bujing-host-${{ inputs.build_id }}
           path: ${{ runner.temp }}/artifact/ios
+          if-no-files-found: error
           retention-days: 3
 
       - name: Upload artifact (macOS)
@@ -289,6 +293,7 @@ jobs:
         with:
           name: bujing-host-${{ inputs.build_id }}
           path: ${{ runner.temp }}/artifact/macos
+          if-no-files-found: error
           retention-days: 3
 
       - name: Upload artifact (Windows)
@@ -297,4 +302,5 @@ jobs:
         with:
           name: bujing-host-${{ inputs.build_id }}
           path: ${{ runner.temp }}/artifact/windows
+          if-no-files-found: error
           retention-days: 3

@@ -112,7 +112,17 @@ jobs:
           node scripts/build-preview-ipa.mjs
           ls -lh "$BUJING_PREVIEW_IPA_OUT"
           cat "${BUJING_PREVIEW_IPA_OUT}.meta.json"
-          ls -lh "${BUJING_PREVIEW_IPA_SYMBOLS_OUT}" || true
+          # 混淆在本 workflow 恒为开启（未暴露 BUJING_PREVIEW_SHELL_OBFUSCATE 入参），
+          # 符号表为空说明包上线后崩溃无法符号化，必须红。
+          # 不能只靠 upload-artifact 的 if-no-files-found：它只在「所有 path 全部落空」
+          # 时才触发，单缺 symbols/*.symbols 时 IPA 仍在、会被静默通过。
+          symbols_count=$(find "$BUJING_PREVIEW_IPA_SYMBOLS_OUT" -maxdepth 1 \
+            -name '*.symbols' 2>/dev/null | wc -l | tr -d '[:space:]')
+          if [ "${symbols_count:-0}" -lt 1 ]; then
+            echo "缺少 Dart 混淆符号表（*.symbols）：$BUJING_PREVIEW_IPA_SYMBOLS_OUT" >&2
+            exit 1
+          fi
+          ls -lh "$BUJING_PREVIEW_IPA_SYMBOLS_OUT"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -122,4 +132,6 @@ jobs:
             ${{ github.workspace }}/out/Bujing-preview.ipa
             ${{ github.workspace }}/out/Bujing-preview.ipa.meta.json
             ${{ github.workspace }}/out/symbols/*.symbols
+          # 与 bujing-gha-host-build.yml 同口径：产物缺失一律红，不默认 warn 放过
+          if-no-files-found: error
           retention-days: 7

@@ -14,8 +14,8 @@
 #   Bujing-preview.ipa / Bujing-preview.ipa.meta.json / symbols/*.symbols
 #
 # 七牛最终产物（与 preview-apk/ 平行）：
-#   preview-ipa/<version>/Bujing-preview.ipa
-#   preview-ipa/<version>/symbols/app.ios-arm64.symbols   （Dart 混淆符号表，崩溃符号化用）
+#   preview-ipa/<version>/build-<code>/<sha256>/Bujing-preview-<version>-build-<code>-<sha12>.ipa
+#   preview-ipa/<version>/build-<code>/<sha256>/symbols/app.ios-arm64.symbols   （Dart 混淆符号表，崩溃符号化用）
 #   preview-ipa/<version>/manifest.json
 #   preview-ipa/latest/manifest.json
 #

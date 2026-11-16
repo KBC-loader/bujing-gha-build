@@ -5,16 +5,19 @@
 #
 # 为什么在 GitHub 而不是 CNB：iOS 编译需要 macOS + Xcode，CNB 只有 Linux runner。
 #
-# 产物（七牛，与 preview-apk/ 平行）：
+# 本 workflow 只做「编译 + 上传 Actions artifact」，**不直传七牛**：
+#   美国 runner → 七牛华东单条约 50KB/s，35MB 要 12 分钟；
+#   同一 runner 传 GitHub artifact 是 9MB/s。artifact 由 CNB 拉回国内后再传七牛
+#   （scripts/ci/preview-ipa-pull-upload.sh），所以本仓不需要任何七牛 Secrets。
+#
+# artifact 内容（retention 7 天，CNB 拉取后即完成使命）：
+#   Bujing-preview.ipa / Bujing-preview.ipa.meta.json / symbols/*.symbols
+#
+# 七牛最终产物（与 preview-apk/ 平行）：
 #   preview-ipa/<version>/Bujing-preview.ipa
 #   preview-ipa/<version>/symbols/app.ios-arm64.symbols   （Dart 混淆符号表，崩溃符号化用）
 #   preview-ipa/<version>/manifest.json
 #   preview-ipa/latest/manifest.json
-#
-# 需要的仓库 Secrets（Settings → Secrets and variables → Actions）：
-#   BUJING_GHA_QINIU_ACCESS_KEY / BUJING_GHA_QINIU_SECRET_KEY / BUJING_GHA_QINIU_BUCKET / BUJING_GHA_QINIU_DOMAIN
-#   （可选 BUJING_GHA_QINIU_REGION 默认 z0、BUJING_GHA_QINIU_PRIVATE 默认 1）
-#   —— 未配置时仍会构建并上传 Actions artifact，只是不上传七牛。
 #
 # 本文件需同步到承载构建的 GitHub 仓（BUJING_GHA_REPO，当前 KBC-loader/bujing-gha-build）。
 name: Bujing Preview Shell IPA
@@ -110,35 +113,6 @@ jobs:
           ls -lh "$BUJING_PREVIEW_IPA_OUT"
           cat "${BUJING_PREVIEW_IPA_OUT}.meta.json"
           ls -lh "${BUJING_PREVIEW_IPA_SYMBOLS_OUT}" || true
-
-      - name: Upload to Qiniu
-        working-directory: src
-        env:
-          BUJING_PREVIEW_IPA_OUT: ${{ github.workspace }}/out/Bujing-preview.ipa
-          BUJING_PREVIEW_IPA_SYMBOLS_DIR: ${{ github.workspace }}/out/symbols
-          # 仓库名带 GHA 前缀（BUJING_GHA_QINIU_*），与 CNB 密钥仓命名一致；
-          # 传给脚本的 env 名保持 BUJING_QINIU_*（脚本只认这组）
-          BUJING_QINIU_ACCESS_KEY: ${{ secrets.BUJING_GHA_QINIU_ACCESS_KEY }}
-          BUJING_QINIU_SECRET_KEY: ${{ secrets.BUJING_GHA_QINIU_SECRET_KEY }}
-          BUJING_QINIU_BUCKET: ${{ secrets.BUJING_GHA_QINIU_BUCKET }}
-          BUJING_QINIU_DOMAIN: ${{ secrets.BUJING_GHA_QINIU_DOMAIN }}
-          BUJING_QINIU_REGION: ${{ secrets.BUJING_GHA_QINIU_REGION }}
-          BUJING_QINIU_PRIVATE: ${{ secrets.BUJING_GHA_QINIU_PRIVATE }}
-          BUJING_PREVIEW_SHELL_BUILD_NAME: ${{ inputs.build_name }}
-          BUJING_PREVIEW_SHELL_BUILD_NUMBER: ${{ inputs.build_number }}
-        run: |
-          set -euo pipefail
-          if [ -z "${BUJING_QINIU_ACCESS_KEY:-}" ] || [ -z "${BUJING_QINIU_SECRET_KEY:-}" ] \
-             || [ -z "${BUJING_QINIU_BUCKET:-}" ] || [ -z "${BUJING_QINIU_DOMAIN:-}" ]; then
-            echo "七牛 secrets 未配置，跳过上传（IPA 仍在 artifact 里）"
-            exit 0
-          fi
-          mkdir -p /tmp/bujing-qiniu && cd /tmp/bujing-qiniu
-          npm init -y >/dev/null
-          npm install --no-fund --no-audit qiniu@7.15.2
-          cd "$GITHUB_WORKSPACE/src"
-          NODE_PATH=/tmp/bujing-qiniu/node_modules \
-            node scripts/ci/upload-preview-ipa-qiniu.mjs "$BUJING_PREVIEW_IPA_OUT"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4

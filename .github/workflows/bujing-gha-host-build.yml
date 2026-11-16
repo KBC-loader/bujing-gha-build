@@ -69,19 +69,26 @@ jobs:
           curl -fsSL -H "X-Bujing-Gha-Token: ${SOURCE_TOKEN}" -o source.zip "${SOURCE_URL}"
           mkdir -p host-src
           unzip -q source.zip -d host-src
+          # macOS runner 自带 Bash 3.2，无 mapfile；用 while-read 收数组
           if [ "${{ inputs.target }}" = "ios-sdk" ]; then
-            mapfile -t modules < <(find host-src -mindepth 1 -maxdepth 3 -type d -name 'bujing_android_module')
+            modules=()
+            while IFS= read -r line; do
+              modules+=("$line")
+            done < <(find host-src -mindepth 1 -maxdepth 3 -type d -name 'bujing_android_module')
             if [ "${#modules[@]}" -ne 1 ]; then
               echo "expected exactly one bujing_android_module, got ${#modules[@]}"
-              printf '%s\n' "${modules[@]:-}"
+              printf '%s\n' "${modules[@]+"${modules[@]}"}"
               exit 1
             fi
             echo "HOST_DIR=${modules[0]}" >> "$GITHUB_ENV"
           else
-            mapfile -t dirs < <(find host-src -mindepth 1 -maxdepth 1 -type d ! -name '__MACOSX')
+            dirs=()
+            while IFS= read -r line; do
+              dirs+=("$line")
+            done < <(find host-src -mindepth 1 -maxdepth 1 -type d ! -name '__MACOSX')
             if [ "${#dirs[@]}" -ne 1 ]; then
               echo "expected exactly one top-level dir, got ${#dirs[@]}"
-              printf '%s\n' "${dirs[@]:-}"
+              printf '%s\n' "${dirs[@]+"${dirs[@]}"}"
               exit 1
             fi
             echo "HOST_DIR=${dirs[0]}" >> "$GITHUB_ENV"
@@ -201,10 +208,13 @@ jobs:
             fi
           done
           if [ -z "$APP" ]; then
-            mapfile -t apps < <(find build/ios -path '*/Runner.app' -type d 2>/dev/null)
+            apps=()
+            while IFS= read -r line; do
+              apps+=("$line")
+            done < <(find build/ios -path '*/Runner.app' -type d 2>/dev/null)
             if [ "${#apps[@]}" -ne 1 ]; then
               echo "expected exactly one Runner.app under build/ios, got ${#apps[@]}"
-              printf '%s\n' "${apps[@]:-}"
+              printf '%s\n' "${apps[@]+"${apps[@]}"}"
               find build/ios -maxdepth 4 -type d 2>/dev/null || true
               exit 1
             fi
@@ -230,10 +240,13 @@ jobs:
           # unsigned：Gatekeeper 会拦；内部分发需手动 xattr -cr，或另行 codesign + notarytool
           flutter build macos -t lib/main_desktop.dart --release
           PRODUCTS="build/macos/Build/Products/Release"
-          mapfile -t apps < <(find "$PRODUCTS" -maxdepth 1 -name '*.app')
+          apps=()
+          while IFS= read -r line; do
+            apps+=("$line")
+          done < <(find "$PRODUCTS" -maxdepth 1 -name '*.app')
           if [ "${#apps[@]}" -ne 1 ]; then
             echo "expected exactly one .app under $PRODUCTS, got ${#apps[@]}"
-            printf '%s\n' "${apps[@]:-}"
+            printf '%s\n' "${apps[@]+"${apps[@]}"}"
             exit 1
           fi
           mkdir -p "$RUNNER_TEMP/artifact/macos"

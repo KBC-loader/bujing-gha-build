@@ -1,0 +1,126 @@
+# 平台通用预览壳 macOS zip（unsigned .app，未公证）—— 与 APK / IPA 通道同源、同版本号口径
+#
+# 触发：CNB main push 的 build-preview-macos 任务构建源码包 → 上传七牛 →
+#       workflow_dispatch 调本 workflow。也可在 Actions 页手动 Run workflow。
+#
+# 为什么在 GitHub 而不是 CNB：macOS 桌面编译需要 macos-latest runner，CNB 只有 Linux。
+# 这不是下载中心里按项目出的 macos_app 正式包。本轮不做 Apple 公证或 DMG。
+#
+# 本 workflow 只做「编译 + 上传 Actions artifact」，**不直传七牛**
+# （与 bujing-preview-ipa.yml 同一原因：美国 runner → 七牛华东过慢）。
+# artifact 由 CNB 拉回国内后再传七牛（scripts/ci/preview-shell-gha-pull-upload.sh）。
+#
+# 七牛最终产物：
+#   preview-macos/<version>/build-<code>/<sha256>/Bujing-preview-macos-<version>-build-<code>-<sha12>.zip
+#   preview-macos/latest/manifest.json
+#
+# 本文件需同步到承载构建的 GitHub 仓（BUJING_GHA_REPO）。
+name: Bujing Preview Shell macOS
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_url:
+        description: 预览壳源码包（tar.gz）地址，由 CNB 上传七牛后给出
+        required: true
+        type: string
+      source_token:
+        description: 下载源码包时附加的 X-Bujing-Gha-Token（可选）
+        required: false
+        default: ""
+        type: string
+      build_name:
+        description: 版本名（默认取 mobile/pubspec.yaml）
+        required: false
+        default: ""
+        type: string
+      build_number:
+        description: 构建号（单调递增，默认 git 提交数）
+        required: false
+        default: ""
+        type: string
+      flutter_version:
+        description: Flutter SDK 版本
+        required: false
+        default: "3.47.3"
+        type: string
+
+run-name: bujing-preview-macos-${{ inputs.build_name }}-${{ inputs.build_number }}
+
+concurrency:
+  group: bujing-preview-macos
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Download staged source
+        env:
+          SOURCE_URL: ${{ inputs.source_url }}
+          SOURCE_TOKEN: ${{ inputs.source_token }}
+        run: |
+          set -euo pipefail
+          if [ -n "${SOURCE_TOKEN}" ]; then
+            curl -fsSL -H "X-Bujing-Gha-Token: ${SOURCE_TOKEN}" -o source.tar.gz "${SOURCE_URL}"
+          else
+            curl -fsSL -o source.tar.gz "${SOURCE_URL}"
+          fi
+          mkdir -p src
+          tar -xzf source.tar.gz -C src
+          for dir in mobile packages scripts; do
+            if [ ! -d "src/$dir" ]; then
+              echo "源码包缺少 $dir" >&2
+              ls -la src || true
+              exit 1
+            fi
+          done
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ inputs.flutter_version }}
+          channel: stable
+          cache: true
+
+      - name: Cache CocoaPods
+        uses: actions/cache@v4
+        with:
+          path: ~/Library/Caches/CocoaPods
+          key: bujing-preview-macos-pods-${{ hashFiles('src/mobile/pubspec.lock') }}
+          restore-keys: bujing-preview-macos-pods-
+
+      - name: Build unsigned macOS zip
+        working-directory: src
+        env:
+          BUJING_PREVIEW_SHELL_BUILD_NAME: ${{ inputs.build_name }}
+          BUJING_PREVIEW_SHELL_BUILD_NUMBER: ${{ inputs.build_number }}
+          BUJING_PREVIEW_DESKTOP_OUT: ${{ github.workspace }}/out/Bujing-preview-macos.zip
+          BUJING_PREVIEW_DESKTOP_SYMBOLS_OUT: ${{ github.workspace }}/out/symbols
+        run: |
+          set -euo pipefail
+          node scripts/build-preview-shell-desktop.mjs macos
+          ls -lh "$BUJING_PREVIEW_DESKTOP_OUT"
+          cat "${BUJING_PREVIEW_DESKTOP_OUT}.meta.json"
+          symbols_count=$(find "$BUJING_PREVIEW_DESKTOP_SYMBOLS_OUT" -maxdepth 1 \
+            -name '*.symbols' 2>/dev/null | wc -l | tr -d '[:space:]')
+          if [ "${symbols_count:-0}" -lt 1 ]; then
+            echo "缺少 Dart 混淆符号表（*.symbols）：$BUJING_PREVIEW_DESKTOP_SYMBOLS_OUT" >&2
+            exit 1
+          fi
+          ls -lh "$BUJING_PREVIEW_DESKTOP_SYMBOLS_OUT"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: bujing-preview-macos-${{ inputs.build_name }}-${{ inputs.build_number }}
+          path: |
+            ${{ github.workspace }}/out/Bujing-preview-macos.zip
+            ${{ github.workspace }}/out/Bujing-preview-macos.zip.meta.json
+            ${{ github.workspace }}/out/symbols/*.symbols
+          if-no-files-found: error
+          retention-days: 7

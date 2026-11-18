@@ -88,6 +88,9 @@ jobs:
           channel: stable
           cache: true
 
+      - name: Setup NuGet
+        uses: nuget/setup-nuget@v2
+
       - name: Build unsigned Windows zip
         working-directory: src
         shell: bash

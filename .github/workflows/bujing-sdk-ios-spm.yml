@@ -1,0 +1,83 @@
+# 公共 iOS SDK（SPM 二进制）：无项目 Runtime / projectId 注入。
+# 触发：CNB web_trigger_sdk_ios → 源码包上七牛 → workflow_dispatch。
+# 本文件需同步到 BUJING_GHA_REPO（scripts/ci/sync-sdk-ios-workflow.mjs）。
+name: Bujing SDK iOS SPM
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_url:
+        description: SDK 源码包（tar.gz）地址，由 CNB 上传七牛后给出
+        required: true
+        type: string
+      source_token:
+        description: 下载源码包时附加的 X-Bujing-Gha-Token（可选）
+        required: false
+        default: ""
+        type: string
+      sdk_version:
+        description: semver（与 packages/bujing_sdui 对齐）
+        required: true
+        type: string
+      flutter_version:
+        description: Flutter SDK 版本
+        required: false
+        default: "3.47.3"
+        type: string
+
+run-name: bujing-sdk-ios-${{ inputs.sdk_version }}
+
+concurrency:
+  group: bujing-sdk-ios-spm
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-latest
+    timeout-minutes: 90
+    steps:
+      - name: Download staged source
+        env:
+          SOURCE_URL: ${{ inputs.source_url }}
+          SOURCE_TOKEN: ${{ inputs.source_token }}
+        run: |
+          set -euo pipefail
+          if [ -n "${SOURCE_TOKEN}" ]; then
+            curl -fsSL -H "X-Bujing-Gha-Token: ${SOURCE_TOKEN}" -o source.tar.gz "${SOURCE_URL}"
+          else
+            curl -fsSL -o source.tar.gz "${SOURCE_URL}"
+          fi
+          mkdir -p src
+          tar -xzf source.tar.gz -C src
+          test -d src/packages/bujing_android_module
+          test -d src/packages/bujing_sdui
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ inputs.flutter_version }}
+          channel: stable
+          cache: true
+
+      - name: Build ios-framework
+        working-directory: src/packages/bujing_android_module
+        run: |
+          set -euo pipefail
+          flutter pub get
+          flutter build ios-framework --no-profile --no-debug --output=build/ios-framework-spm
+          OUT="$RUNNER_TEMP/BujingSdui.xcframework.zip"
+          (cd build/ios-framework-spm/Release && zip -r "$OUT" .)
+          echo "OUT=$OUT" >> "$GITHUB_ENV"
+          shasum -a 256 "$OUT" | tee "$RUNNER_TEMP/checksum.txt"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: BujingSdui-sdk-ios-${{ inputs.sdk_version }}
+          path: |
+            ${{ env.OUT }}
+            ${{ runner.temp }}/checksum.txt
+          if-no-files-found: error

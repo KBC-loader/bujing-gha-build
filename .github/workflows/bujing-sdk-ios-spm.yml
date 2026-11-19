@@ -62,12 +62,18 @@ jobs:
           channel: stable
           cache: true
 
-      - name: Build ios-framework
+      - name: Build ios-framework (unsigned)
         working-directory: src/packages/bujing_android_module
+        env:
+          # 公共 SDK 不代签；宿主 Embed 后用自己的 Team 签
+          CODE_SIGNING_ALLOWED: "NO"
+          CODE_SIGNING_REQUIRED: "NO"
         run: |
           set -euo pipefail
           flutter pub get
-          flutter build ios-framework --no-profile --no-debug --output=build/ios-framework-spm
+          # --no-codesign：GHA 无 Apple 证书；勿用默认 codesign（会报 No valid code signing certificates）
+          flutter build ios-framework --release --no-profile --no-debug --no-codesign \
+            --output=build/ios-framework-spm
           OUT="$RUNNER_TEMP/BujingSdui.xcframework.zip"
           (cd build/ios-framework-spm/Release && zip -r "$OUT" .)
           echo "OUT=$OUT" >> "$GITHUB_ENV"

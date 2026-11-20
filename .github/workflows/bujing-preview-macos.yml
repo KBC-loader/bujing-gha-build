@@ -56,7 +56,8 @@ permissions:
 
 jobs:
   build:
-    runs-on: macos-latest
+    # macos-latest 易带上 Xcode 26 / SDK 26，编出的包在 Monterey 12.x 启动即崩（FlutterMacOS NSArray nil）
+    runs-on: macos-14
     timeout-minutes: 90
 
     steps:
@@ -80,6 +81,11 @@ jobs:
               exit 1
             fi
           done
+
+      - name: Select Xcode 16
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: "16.2"
 
       - uses: subosito/flutter-action@v2
         with:

@@ -174,12 +174,17 @@ jobs:
             fi
             node tool/prepare_ios_framework_podfile.mjs
           fi
-          flutter build ios-framework --release --no-debug --no-profile --no-codesign \
+          # 同时打 Debug：Release 模拟器 App 空壳时由 assert 脚本回填（见 ios-sdk-release-sim-app-stub）
+          flutter build ios-framework --release --debug --no-profile --no-codesign \
             --dart-define=BUJING_RUNTIME="${RUNTIME_URL}" \
             --dart-define=BUJING_PROJECT_ID="${PROJECT_ID}" \
             --output="$OUT"
+          if [[ -f "$GITHUB_WORKSPACE/scripts/ci/assert-ios-sdk-app-framework.mjs" ]]; then
+            node "$GITHUB_WORKSPACE/scripts/ci/assert-ios-sdk-app-framework.mjs" "$OUT"
+          fi
           mkdir -p "$RUNNER_TEMP/artifact/ios-sdk"
-          (cd "$OUT" && zip -r "$RUNNER_TEMP/artifact/ios-sdk/frameworks.zip" .)
+          # 交付侧期望 zip 根为 Release/…（packageIosSdkDeliveryZip → Frameworks/Release/）
+          (cd "$OUT" && zip -r "$RUNNER_TEMP/artifact/ios-sdk/frameworks.zip" Release)
 
       - name: Build iOS IPA (unsigned)
         if: inputs.target == 'ios'

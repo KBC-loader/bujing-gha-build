@@ -68,10 +68,16 @@ jobs:
           # 公共 SDK 不代签；宿主 Embed 后用自己的 Team 签
           CODE_SIGNING_ALLOWED: "NO"
           CODE_SIGNING_REQUIRED: "NO"
+          COCOAPODS_DISABLE_STATS: "true"
         run: |
           set -euo pipefail
           flutter pub get
-          # --no-codesign：GHA 无 Apple 证书；勿用默认 codesign（会报 No valid code signing certificates）
+          # 生成 .ios/ 后再注入 Readium podspecs（否则 pod install 找不到 ReadiumOPDS 3.11）
+          if [[ ! -f .ios/Podfile ]]; then
+            flutter create --template=module --project-name=bujing_android_module .
+          fi
+          node tool/prepare_ios_framework_podfile.mjs
+          # --no-codesign：GHA 无 Apple 证书；pod install 由 flutter 触发，此时 Podfile 已含 Readium 源
           flutter build ios-framework --release --no-profile --no-debug --no-codesign \
             --output=build/ios-framework-spm
           OUT="$RUNNER_TEMP/BujingSdui.xcframework.zip"

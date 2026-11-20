@@ -168,7 +168,13 @@ jobs:
           : "${PROJECT_ID:?project_id required for ios-sdk}"
           OUT="$RUNNER_TEMP/framework-out"
           mkdir -p "$OUT"
-          flutter build ios-framework --release --no-debug --no-profile \
+          if [[ -f tool/prepare_ios_framework_podfile.mjs ]]; then
+            if [[ ! -f .ios/Podfile ]]; then
+              flutter create --template=module --project-name=bujing_android_module . || true
+            fi
+            node tool/prepare_ios_framework_podfile.mjs
+          fi
+          flutter build ios-framework --release --no-debug --no-profile --no-codesign \
             --dart-define=BUJING_RUNTIME="${RUNTIME_URL}" \
             --dart-define=BUJING_PROJECT_ID="${PROJECT_ID}" \
             --output="$OUT"

@@ -78,8 +78,11 @@ jobs:
           fi
           node tool/prepare_ios_framework_podfile.mjs
           # --no-codesign：GHA 无 Apple 证书；pod install 由 flutter 触发，此时 Podfile 已含 Readium 源
-          flutter build ios-framework --release --no-profile --no-debug --no-codesign \
+          # 须同时打 Debug：Release 的模拟器 App 切片本应为 Debug JIT；空壳时用 Debug 回填（见 assert-ios-sdk-app-framework.mjs）
+          flutter build ios-framework --release --debug --no-profile --no-codesign \
             --output=build/ios-framework-spm
+          # 源码包含 scripts/；空壳 sim App 用 Debug 切片回填后再打 Release zip
+          node ../../scripts/ci/assert-ios-sdk-app-framework.mjs build/ios-framework-spm
           OUT="$RUNNER_TEMP/BujingSdui.xcframework.zip"
           (cd build/ios-framework-spm/Release && zip -r "$OUT" .)
           echo "OUT=$OUT" >> "$GITHUB_ENV"

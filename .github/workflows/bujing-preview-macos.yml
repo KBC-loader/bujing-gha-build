@@ -56,8 +56,9 @@ permissions:
 
 jobs:
   build:
-    # macos-latest 易带上 Xcode 26 / SDK 26，编出的包在 Monterey 12.x 启动即崩（FlutterMacOS NSArray nil）
-    runs-on: macos-14
+    # GitHub 已于 2026-11-02 下线 macos-14（报 macos-14-arm64-us-default not supported）。
+    # 勿用 macos-latest：镜像默认易带上 Xcode 26 / SDK 26。固定 macos-15 + 显式选 Xcode 16.2。
+    runs-on: macos-15
     timeout-minutes: 90
 
     steps:
